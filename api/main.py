@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from api.routes import jobs, query, sessions
 from config import settings
@@ -25,6 +27,12 @@ def create_app() -> FastAPI:
     app.include_router(query.router)
     app.include_router(jobs.router)
     app.include_router(sessions.router)
+
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return RedirectResponse(url="/static/index.html")
 
     return app
 

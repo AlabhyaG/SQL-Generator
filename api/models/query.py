@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class QueryRequest(BaseModel):
     question: str
-    db_url: str
+    db_url: str | None = None
     session_id: str | None = None
     feedback: str | None = None
 
