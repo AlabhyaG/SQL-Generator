@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SQL Generator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: monospace;
+      background: #f4f4f4;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    /* ── DB credentials screen ── */
+    #db-screen {
+      background: #fff;
+      border: 1px solid #ccc;
+      padding: 24px;
+      width: 360px;
+    }
+
+    #db-screen h2 { margin-bottom: 16px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+
+    #db-screen input {
+      display: block;
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 8px;
+      border: 1px solid #ccc;
+      font-family: monospace;
+      font-size: 13px;
+    }
+
+    #db-screen .row { display: flex; gap: 8px; }
+    #db-screen .row input:first-child { flex: 2; }
+    #db-screen .row input:last-child  { flex: 1; }
+
+    #db-screen button {
+      width: 100%;
+      padding: 9px;
+      margin-top: 4px;
+      background: #222;
+      color: #fff;
+      border: none;
+      font-family: monospace;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    #db-error { color: red; font-size: 12px; margin-top: 8px; display: none; }
+
+    /* ── Chat screen ── */
+    #chat-screen {
+      display: none;
+      flex-direction: column;
+      width: 640px;
+      height: 90vh;
+      background: #fff;
+      border: 1px solid #ccc;
+    }
+
+    #chat-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid #ccc;
+      font-size: 12px;
+      color: #666;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #chat-header span { font-weight: bold; color: #222; }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .msg { max-width: 80%; display: flex; flex-direction: column; gap: 3px; }
+    .msg.user  { align-self: flex-end; align-items: flex-end; }
+    .msg.bot   { align-self: flex-start; align-items: flex-start; }
+
+    .bubble {
+      padding: 9px 12px;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .msg.user .bubble { background: #222; color: #fff; }
+    .msg.bot  .bubble { background: #eee; color: #222; border: 1px solid #ddd; }
+
+    .msg.bot .bubble.thinking { color: #999; font-style: italic; }
+    .msg.bot .bubble.error    { background: #fff0f0; border-color: #f99; color: #c00; }
+
+    .meta {
+      font-size: 11px;
+      color: #999;
+      padding: 0 4px;
+    }
+
+    details { margin-top: 4px; }
+    details summary {
+      font-size: 11px;
+      color: #888;
+      cursor: pointer;
+      user-select: none;
+    }
+    details pre {
+      font-size: 11px;
+      background: #f8f8f8;
+      border: 1px solid #ddd;
+      padding: 8px;
+      margin-top: 4px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    #input-row {
+      display: flex;
+      border-top: 1px solid #ccc;
+    }
+
+    #question {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      font-family: monospace;
+      font-size: 13px;
+      outline: none;
+      resize: none;
+      height: 48px;
+    }
+
+    #send-btn {
+      padding: 0 18px;
+      background: #222;
+      color: #fff;
+      border: none;
+      font-family: monospace;
+      font-size: 13px;
+      cursor: pointer;
+      border-left: 1px solid #ccc;
+    }
+
+    #send-btn:disabled { background: #aaa; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+<!-- ── Screen 1: DB credentials ── -->
+<div id="db-screen">
+  <h2>Connect to database</h2>
+  <div class="row">
+    <input id="host"   placeholder="Host"     value="localhost" />
+    <input id="port"   placeholder="Port"     value="5432" />
+  </div>
+  <input id="dbname"   placeholder="Database name" />
+  <input id="username" placeholder="Username" />
+  <input id="password" placeholder="Password" type="password" />
+  <button onclick="connect()">Connect</button>
+  <div id="db-error"></div>
+</div>
+
+<!-- ── Screen 2: Chat ── -->
+<div id="chat-screen">
+  <div id="chat-header">
+    <span id="db-label"></span>
+    <span id="session-label" style="color:#aaa">no session yet</span>
+  </div>
+  <div id="messages"></div>
+  <div id="input-row">
+    <textarea id="question" placeholder="Ask a question about your data…"></textarea>
+    <button id="send-btn" onclick="send()">Send</button>
+  </div>
+</div>
+
+<script>
+  let dbUrl     = null;
+  let sessionId = null;
+  let busy      = false;
+  let msgIdx    = 0;
+
+  // ── DB connect ──────────────────────────────────────────────
+
+  function connect() {
+    const host     = v('host');
+    const port     = v('port');
+    const dbname   = v('dbname');
+    const username = v('username');
+    const password = v('password');
+
+    if (!dbname || !username) {
+      showDbError('Database name and username are required.');
+      return;
+    }
+
+    dbUrl = `postgresql://${username}:${encodeURIComponent(password)}@${host}:${port}/${dbname}`;
+
+    document.getElementById('db-screen').style.display  = 'none';
+    document.getElementById('chat-screen').style.display = 'flex';
+    document.getElementById('db-label').textContent = `${username}@${host}:${port}/${dbname}`;
+    document.getElementById('question').focus();
+  }
+
+  function showDbError(msg) {
+    const el = document.getElementById('db-error');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  // ── Send message ────────────────────────────────────────────
+
+  async function send() {
+    if (busy) return;
+    const question = document.getElementById('question').value.trim();
+    if (!question) return;
+
+    document.getElementById('question').value = '';
+    setInputEnabled(false);
+
+    appendMsg('user', question);
+    const thinkingId = appendMsg('bot', 'thinking…', 'thinking');
+
+    const body = { question };
+    if (!sessionId) body.db_url = dbUrl;       // only needed on first message
+    if (sessionId)  body.session_id = sessionId;
+
+    try {
+      const res = await fetch('/query', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        updateMsg(thinkingId, err.detail || 'Request failed.', 'error');
+        setInputEnabled(true);
+        return;
+      }
+
+      const data = await res.json();
+      sessionId = data.session_id;
+      document.getElementById('session-label').textContent = `session: ${sessionId.slice(0, 8)}…`;
+
+      await pollJob(data.job_id, thinkingId);
+    } catch (e) {
+      updateMsg(thinkingId, `Network error: ${e.message}`, 'error');
+    }
+
+    setInputEnabled(true);
+  }
+
+  // ── Poll ────────────────────────────────────────────────────
+
+  async function pollJob(jobId, thinkingId) {
+    for (;;) {
+      await sleep(2000);
+      let job;
+      try {
+        const res = await fetch(`/jobs/${jobId}`);
+        job = await res.json();
+      } catch (e) {
+        updateMsg(thinkingId, `Poll error: ${e.message}`, 'error');
+        return;
+      }
+
+      if (job.status === 'completed') {
+        updateMsg(thinkingId, job.answer, '');
+        const meta = [];
+        if (job.confidence) meta.push(`confidence: ${job.confidence}`);
+        if (job.retry_count > 0) meta.push(`retries: ${job.retry_count}`);
+        if (meta.length) setMeta(thinkingId, meta.join(' · '));
+        if (job.sql_query) setSql(thinkingId, job.sql_query);
+        if (job.can_retry) setMeta(thinkingId, (getMeta(thinkingId) + ' · low confidence — try rephrasing').trim());
+        return;
+      }
+
+      if (job.status === 'failed') {
+        updateMsg(thinkingId, `Failed: ${job.error || 'unknown error'}`, 'error');
+        return;
+      }
+
+      // still queued / running — keep polling
+      const dots = '.'.repeat((Date.now() / 600 | 0) % 4);
+      updateMsg(thinkingId, `thinking${dots}`, 'thinking');
+    }
+  }
+
+  // ── DOM helpers ─────────────────────────────────────────────
+
+  function appendMsg(role, text, extraClass = '') {
+    const id   = `m${msgIdx++}`;
+    const wrap = document.createElement('div');
+    wrap.className = `msg ${role}`;
+    wrap.id = id;
+
+    const bubble = document.createElement('div');
+    bubble.className = `bubble ${extraClass}`.trim();
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+
+    document.getElementById('messages').appendChild(wrap);
+    wrap.scrollIntoView({ block: 'end' });
+    return id;
+  }
+
+  function updateMsg(id, text, extraClass) {
+    const bubble = document.querySelector(`#${id} .bubble`);
+    if (!bubble) return;
+    bubble.textContent = text;
+    bubble.className = `bubble ${extraClass ?? ''}`.trim();
+    document.getElementById(id).scrollIntoView({ block: 'end' });
+  }
+
+  function setMeta(id, text) {
+    let meta = document.querySelector(`#${id} .meta`);
+    if (!meta) {
+      meta = document.createElement('div');
+      meta.className = 'meta';
+      document.getElementById(id).appendChild(meta);
+    }
+    meta.textContent = text;
+  }
+
+  function getMeta(id) {
+    return document.querySelector(`#${id} .meta`)?.textContent ?? '';
+  }
+
+  function setSql(id, sql) {
+    const wrap = document.getElementById(id);
+    if (wrap.querySelector('details')) return;
+    const det = document.createElement('details');
+    det.innerHTML = `<summary>show SQL</summary><pre>${escHtml(sql)}</pre>`;
+    wrap.appendChild(det);
+  }
+
+  function setInputEnabled(on) {
+    busy = !on;
+    document.getElementById('send-btn').disabled = !on;
+    document.getElementById('question').disabled = !on;
+  }
+
+  // Enter to send (Shift+Enter for newline)
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('question').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+  });
+
+  function v(id)         { return document.getElementById(id).value.trim(); }
+  function sleep(ms)     { return new Promise(r => setTimeout(r, ms)); }
+  function escHtml(s)    { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+</script>
+</body>
+</html>
