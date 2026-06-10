@@ -110,6 +110,12 @@ async def run() -> None:
 
     llm = GroqLLMProvider()
     retriever = SchemaRetriever()
+
+    # Trigger embedding model download before any job arrives
+    print("Loading embedding model (one-time download if not cached)...")
+    retriever._ef(["warmup"])
+    print("Embedding model ready.")
+
     graph = build_graph(llm, retriever)
 
     print("Worker started — listening on queue:jobs")
