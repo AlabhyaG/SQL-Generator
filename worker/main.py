@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 import redis.asyncio as aioredis
 
 from config import settings
-from providers.gemini import GeminiLLMProvider
+from graph.schema_retriever import SchemaRetriever
+from providers.groq import GroqLLMProvider
 from repositories.job_repository import JobRepository
 from repositories.session_repository import SessionRepository
 from worker.graph import build_graph
@@ -30,6 +31,10 @@ async def _process_job(
             "db_url": payload["db_url"],
             "session_history": history,
             "db_schema": "",
+            "schema_metadata": {},
+            "relevant_tables": [],
+            "filtered_schema": "",
+            "ambiguous_groups": [],
             "sql_query": "",
             "sql_error": None,
             "raw_results": [],
@@ -44,10 +49,19 @@ async def _process_job(
 
         final_state = graph.invoke(initial_state)
 
+        # Needs clarification — ambiguous tables detected
+        if final_state.get("ambiguous_groups"):
+            await job_repo.update(
+                job_id,
+                status="needs_clarification",
+                clarification=json.dumps(final_state["ambiguous_groups"]),
+            )
+            return
+
+        # Exhausted retries
         exhausted = final_state["retry_count"] >= settings.max_retries and (
             final_state.get("sql_error") or final_state.get("failure_type") == "irrelevant"
         )
-
         if exhausted:
             await job_repo.update(
                 job_id,
@@ -70,7 +84,6 @@ async def _process_job(
             retry_count=final_state["retry_count"],
         )
 
-        # Only record high-confidence answers in session history
         if confidence == "high":
             await session_repo.append_history(session_id, {
                 "question": payload["question"],
@@ -85,17 +98,24 @@ async def _process_job(
 
 
 async def run() -> None:
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    redis_client = aioredis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        protocol=2,
+        socket_timeout=None,
+        socket_connect_timeout=5,
+    )
     job_repo = JobRepository(redis_client)
     session_repo = SessionRepository(redis_client)
 
-    llm = GeminiLLMProvider()
-    graph = build_graph(llm)
+    llm = GroqLLMProvider()
+    retriever = SchemaRetriever()
+    graph = build_graph(llm, retriever)
 
     print("Worker started — listening on queue:jobs")
 
     while True:
-        result = await redis_client.blpop("queue:jobs", timeout=0)
+        result = await redis_client.blpop("queue:jobs", timeout=5)
         if result is None:
             continue
         _, raw = result

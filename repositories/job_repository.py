@@ -3,7 +3,7 @@ import json
 from config import settings
 from repositories.base import BaseRepository
 
-_OPTIONAL_FIELDS = ("answer", "sql_query", "confidence", "error", "failure_type")
+_OPTIONAL_FIELDS = ("answer", "sql_query", "confidence", "error", "failure_type", "clarification")
 
 
 class JobRepository(BaseRepository):
@@ -54,4 +54,10 @@ class JobRepository(BaseRepository):
         for field in _OPTIONAL_FIELDS:
             if result.get(field) == "":
                 result[field] = None
+        # clarification is stored as JSON string, deserialize back to list
+        if result.get("clarification"):
+            try:
+                result["clarification"] = json.loads(result["clarification"])
+            except Exception:
+                result["clarification"] = None
         return result

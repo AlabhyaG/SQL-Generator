@@ -1,20 +1,19 @@
 from langgraph.graph import END, StateGraph
 
 from config import settings
+from graph.nodes.ambiguity_check import AmbiguityCheckNode
 from graph.nodes.check_confidence import CheckConfidenceNode
 from graph.nodes.check_relevance import CheckRelevanceNode
 from graph.nodes.execute_sql import ExecuteSQLNode
 from graph.nodes.fetch_schema import FetchSchemaNode
 from graph.nodes.format_answer import FormatAnswerNode
 from graph.nodes.generate_sql import GenerateSQLNode
+from graph.nodes.retrieve_tables import RetrieveTablesNode
 from graph.nodes.validate_sql import ValidateSQLNode
+from graph.schema_retriever import SchemaRetriever
 from graph.state import GraphState
 from providers.base import BaseLLMProvider
 
-
-# --- Routing nodes ---
-# These are plain functions, not BaseNode subclasses — they only update
-# state fields before re-entering generate_sql. No external calls needed.
 
 def _set_sql_invalid(state: GraphState) -> dict:
     return {"failure_type": "sql_invalid", "retry_count": state["retry_count"] + 1}
@@ -28,8 +27,11 @@ def _set_irrelevant(state: GraphState) -> dict:
     }
 
 
-# --- Conditional edge functions ---
-# Return the name of the next node (or END) based on current state.
+def _route_after_ambiguity(state: GraphState) -> str:
+    if state.get("ambiguous_groups"):
+        return END
+    return "generate_sql"
+
 
 def _route_after_validate(state: GraphState) -> str:
     if state.get("sql_error"):
@@ -47,27 +49,26 @@ def _route_after_relevance(state: GraphState) -> str:
     return "check_confidence"
 
 
-# --- Graph builder ---
-
-def build_graph(llm: BaseLLMProvider):
+def build_graph(llm: BaseLLMProvider, retriever: SchemaRetriever):
     g = StateGraph(GraphState)
 
-    # Register every node
-    g.add_node("fetch_schema",    FetchSchemaNode())
-    g.add_node("generate_sql",    GenerateSQLNode(llm))
-    g.add_node("validate_sql",    ValidateSQLNode())
-    g.add_node("set_sql_invalid", _set_sql_invalid)
-    g.add_node("execute_sql",     ExecuteSQLNode())
-    g.add_node("format_answer",   FormatAnswerNode(llm))
-    g.add_node("check_relevance", CheckRelevanceNode(llm))
-    g.add_node("set_irrelevant",  _set_irrelevant)
+    g.add_node("fetch_schema",     FetchSchemaNode(retriever))
+    g.add_node("retrieve_tables",  RetrieveTablesNode(retriever))
+    g.add_node("ambiguity_check",  AmbiguityCheckNode())
+    g.add_node("generate_sql",     GenerateSQLNode(llm))
+    g.add_node("validate_sql",     ValidateSQLNode())
+    g.add_node("set_sql_invalid",  _set_sql_invalid)
+    g.add_node("execute_sql",      ExecuteSQLNode())
+    g.add_node("format_answer",    FormatAnswerNode(llm))
+    g.add_node("check_relevance",  CheckRelevanceNode(llm))
+    g.add_node("set_irrelevant",   _set_irrelevant)
     g.add_node("check_confidence", CheckConfidenceNode(llm))
 
-    # Entry point
     g.set_entry_point("fetch_schema")
 
-    # Fixed edges — always go to this next node
-    g.add_edge("fetch_schema",    "generate_sql")
+    # Fixed edges
+    g.add_edge("fetch_schema",    "retrieve_tables")
+    g.add_edge("retrieve_tables", "ambiguity_check")
     g.add_edge("generate_sql",    "validate_sql")
     g.add_edge("set_sql_invalid", "generate_sql")
     g.add_edge("execute_sql",     "format_answer")
@@ -75,7 +76,8 @@ def build_graph(llm: BaseLLMProvider):
     g.add_edge("set_irrelevant",  "generate_sql")
     g.add_edge("check_confidence", END)
 
-    # Conditional edges — routing function decides the next node at runtime
+    # Conditional edges
+    g.add_conditional_edges("ambiguity_check", _route_after_ambiguity)
     g.add_conditional_edges("validate_sql",    _route_after_validate)
     g.add_conditional_edges("check_relevance", _route_after_relevance)
 
