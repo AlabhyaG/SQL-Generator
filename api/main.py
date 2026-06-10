@@ -11,7 +11,7 @@ from config import settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True, protocol=2)
     yield
     await app.state.redis.aclose()
 

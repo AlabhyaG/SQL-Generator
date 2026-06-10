@@ -286,6 +286,12 @@
         return;
       }
 
+      if (job.status === 'needs_clarification') {
+        updateMsg(thinkingId, 'Multiple similar tables found. Which one should I use?', '');
+        showClarification(thinkingId, job.clarification, job.question);
+        return;
+      }
+
       if (job.status === 'failed') {
         updateMsg(thinkingId, `Failed: ${job.error || 'unknown error'}`, 'error');
         return;
@@ -357,6 +363,66 @@
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
     });
   });
+
+  // ── Clarification dialog ────────────────────────────────────
+
+  function showClarification(msgId, groups, originalQuestion) {
+    const wrap = document.getElementById(msgId);
+    if (!groups || !groups.length) return;
+
+    const container = document.createElement('div');
+    container.style.cssText = 'margin-top:10px; display:flex; flex-direction:column; gap:8px;';
+
+    groups.forEach(group => {
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:11px; color:#888; margin-bottom:4px;';
+      note.textContent = group.note;
+      container.appendChild(note);
+
+      group.tables.forEach(t => {
+        const btn = document.createElement('button');
+        btn.style.cssText = 'text-align:left; padding:8px 10px; border:1px solid #ccc; background:#f9f9f9; font-family:monospace; font-size:12px; cursor:pointer;';
+        btn.innerHTML = `<strong>${t.name}</strong> — ${t.columns.slice(0, 6).join(', ')}${t.columns.length > 6 ? '…' : ''}`;
+        btn.onclick = () => {
+          container.remove();
+          document.getElementById('question').value = originalQuestion;
+          sendWithFeedback(`Use the table: ${t.name}`);
+        };
+        container.appendChild(btn);
+      });
+    });
+
+    wrap.appendChild(container);
+    setInputEnabled(true);
+  }
+
+  async function sendWithFeedback(feedback) {
+    if (busy) return;
+    const question = document.getElementById('question').value.trim();
+    if (!question) return;
+
+    document.getElementById('question').value = '';
+    setInputEnabled(false);
+    appendMsg('user', question);
+    const thinkingId = appendMsg('bot', 'thinking…', 'thinking');
+
+    const body = { question, feedback };
+    if (sessionId) body.session_id = sessionId;
+
+    try {
+      const res = await fetch('/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      sessionId = data.session_id;
+      await pollJob(data.job_id, thinkingId);
+    } catch (e) {
+      updateMsg(thinkingId, `Network error: ${e.message}`, 'error');
+    }
+    setInputEnabled(true);
+  }
 
   function v(id)         { return document.getElementById(id).value.trim(); }
   function sleep(ms)     { return new Promise(r => setTimeout(r, ms)); }
